@@ -388,6 +388,7 @@ const handleWakeUp = () => {
     }
   };
   // 🚀 终极杀器：全量动态重排引擎
+// 🚀 终极杀器：全量动态重排引擎 (带数据清洗与防崩溃装甲)
   const handleRebalanceAll = async () => {
     setIsThinking(true);
     
@@ -458,12 +459,22 @@ const handleWakeUp = () => {
       const data = await response.json();
       let aiResultStr = data.choices[0].message.content.trim();
       aiResultStr = aiResultStr.replace(/```json/g, '').replace(/```/g, '');
-      const parsedSubTasks = JSON.parse(aiResultStr);
+      
+      // 【防线 1】解析原始数据
+      let parsedSubTasks = JSON.parse(aiResultStr);
 
-      // 5. 格式化并覆盖原有日历
+      // 【防线 2】清洗外壳：对付大模型乱加对象的习惯，强制剥离出纯数组
+      if (!Array.isArray(parsedSubTasks)) {
+        if (parsedSubTasks.tasks) parsedSubTasks = parsedSubTasks.tasks;
+        else if (parsedSubTasks.events) parsedSubTasks = parsedSubTasks.events;
+        else parsedSubTasks = [parsedSubTasks]; // 强行套一个数组兜底
+      }
+
+      // 【防线 3】字段清洗与格式化：确保必定有 title
       const formattedNewSubTasks = parsedSubTasks.map(e => ({
         ...e,
-        backgroundColor: '#f59e0b', // 橙色代表长期任务
+        title: e.title || e.name || '未命名任务', // 兜底标题，防止渲染成空白块
+        backgroundColor: '#f59e0b', 
         borderColor: '#d97706'
       }));
 
@@ -473,7 +484,7 @@ const handleWakeUp = () => {
       
     } catch (error) {
       console.error("重排引擎崩溃:", error);
-      alert("重排失败，请检查控制台日志。");
+      alert("重排失败，请检查控制台日志 (模型可能返回了严重破损的数据格式)。");
     } finally {
       setIsThinking(false);
     }
