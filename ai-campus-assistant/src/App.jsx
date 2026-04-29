@@ -729,9 +729,7 @@ return (
               </div>
             );
           }}
-          
           events={events}
-        />
         />
       </div>
       {/* 任务管理面板 Modal */}
