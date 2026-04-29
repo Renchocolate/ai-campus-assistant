@@ -701,6 +701,26 @@ return (
           locale="zh-cn"
           events={events}
           handleWindowResize={true}
+          // 【核心防御 3】：强制接管渲染，保证多小的色块都显示文字
+          eventContent={(arg) => {
+            return (
+              <div style={{ 
+                padding: '2px 4px', 
+                fontSize: '11px', 
+                lineHeight: '1.2', 
+                whiteSpace: 'normal', 
+                wordBreak: 'break-all',
+                overflow: 'hidden',
+                color: '#ffffff'
+              }}>
+                <div style={{ fontWeight: 'bold', opacity: 0.9 }}>{arg.timeText}</div>
+                <div>{arg.event.title || '未命名'}</div>
+              </div>
+            );
+          }}
+          
+          events={events}
+        />
         />
       </div>
       {/* 任务管理面板 Modal */}
