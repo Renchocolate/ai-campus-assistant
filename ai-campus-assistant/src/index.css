@@ -109,3 +109,17 @@ code {
   padding: 4px 8px;
   background: var(--code-bg);
 }
+/* 强制渲染窄色块内的文本 */
+.fc-event-main {
+  font-size: 11px !important;
+  line-height: 1.3 !important;
+  display: flex !important;
+  align-items: center !important;
+  white-space: normal !important; /* 允许换行 */
+  overflow: hidden !important;
+}
+
+/* 强制设置时间块的最小高度，防止被挤压成一条线 */
+.fc-timegrid-event {
+  min-height: 24px !important;
+}
