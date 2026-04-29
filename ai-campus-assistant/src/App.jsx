@@ -242,32 +242,48 @@ const handleWakeUp = () => {
     };
     reader.readAsText(file);
   };
-// 6. 终极版：长短期智能调度主控引擎
-// 6. 终极版：长短期智能调度主控引擎 (支持任务追溯与管理)
+// 终极感知进化版：支持防重叠、作息红线与循环日程
   const handleSmartSchedule = async () => {
     if (isSleeping) {
       alert("当前处于睡眠模式，系统已暂停调度。请先点击‘起床’。");
-      return; // 修复了原本的中文“回归;”
+      return;
     }
     if (!taskName.trim()) {
       alert("信息安全第一法则：不要传入空负载 (Payload)！请填写任务名称。");
-      return; // 修复了原本的中文“回归;”
+      return;
     }
 
     setIsThinking(true);
-
-    const API_KEY = import.meta.env.VITE_DEEPSEEK_API_KEY; // 安全读取; 
+    const API_KEY = import.meta.env.VITE_DEEPSEEK_API_KEY; 
     const API_URL = "https://api.deepseek.com/chat/completions"; 
 
     try {
-      // 【核心升级 1】为当前任务生成全局唯一的追踪 ID
       const taskId = `task_${Date.now()}`; 
 
+      // 【雷达开启】：提取日历上已有的所有日程，压缩成文本喂给 AI，用来防撞车
+      const existingScheduleStr = events.map(e => {
+        if (e.daysOfWeek) return `[循环课表/任务] 每周 ${e.daysOfWeek.join(',')}, 时间: ${e.startTime}-${e.endTime}`;
+        return `[单次任务] 开始: ${e.start}, 结束: ${e.end || '未知'}`;
+      }).join('\n');
+
       if (!isLongTerm) {
-        // ========== 【分支一：单次短任务】 ==========
+        // ========== 【分支一：单次 / 循环任务】 ==========
         const todayStr = new Date().toLocaleString('zh-CN', { timeZone: 'Asia/Shanghai' });
-        const systemPrompt = `你是一个日程调度器。当前时间是：${todayStr}。
-        提取用户输入，返回合法的 JSON 数组，格式为：[{"title": "名称", "start": "2026-04-29T15:00:00", "end": "2026-04-29T16:00:00"}]。不要包含任何 markdown 标记。`;
+        
+        // 【核心进化】：史上最严厉的 System Prompt
+        const systemPrompt = `你是一个顶级的私人日程大管家。当前系统时间是：${todayStr}。
+        【高压红线规则】
+        1. 睡眠禁区：绝对不允许把任何任务安排在 01:00 到 07:30 之间！
+        2. 冲突规避：你必须避开用户的已有日程，绝不能时间重叠！用户的已有日程如下：
+        ${existingScheduleStr || '当前日历为空'}
+        
+        【输出格式要求】
+        1. 如果用户意图是单次任务，输出格式：[{"title": "名称", "start": "YYYY-MM-DDTHH:mm:00", "end": "YYYY-MM-DDTHH:mm:00"}]
+        2. 如果用户意图是“每天、每周、每个工作日”等循环任务，必须输出 FullCalendar 循环语法：
+        [{"title": "名称", "daysOfWeek": [1,3,5], "startTime": "08:00:00", "endTime": "09:00:00"}] 
+        (注：daysOfWeek数组中，0是周日，1是周一，依次类推到6是周六)
+        
+        仅返回合法的 JSON 数组，不要带任何 markdown (比如 \`\`\`json) 或多余解释！`;
         
         const response = await fetch(API_URL, {
           method: "POST",
@@ -276,27 +292,23 @@ const handleWakeUp = () => {
             model: "deepseek-chat",
             messages: [
               { role: "system", content: systemPrompt },
-              { role: "user", content: taskName }
+              { role: "user", content: `请帮我安排这个日程：${taskName}` }
             ],
             temperature: 0.1
           })
         });
 
         const data = await response.json();
-        const parsedEvents = JSON.parse(data.choices[0].message.content.trim());
+        let aiResultStr = data.choices[0].message.content.trim();
+        // 暴力清除模型可能带回来的 markdown 格式
+        aiResultStr = aiResultStr.replace(/```json/g, '').replace(/```/g, '').trim();
         
-        // 【核心升级 2】将单次任务存入任务管理总表
-        const parentTask = {
-          id: taskId,
-          name: taskName,
-          isLongTerm: false,
-          ddl: null,
-          estimatedHours: null,
-          status: 'active'
-        };
+        console.log("模型原始返回:", aiResultStr);
+        const parsedEvents = JSON.parse(aiResultStr);
+        
+        const parentTask = { id: taskId, name: taskName, isLongTerm: false, ddl: null, estimatedHours: null, status: 'active' };
         setTaskRegistry(prev => [...prev, parentTask]);
 
-        // 【核心升级 3】渲染时给事件打上溯源标签 groupId
         const formattedEvents = parsedEvents.map(e => ({
           ...e,
           groupId: taskId, 
@@ -305,49 +317,38 @@ const handleWakeUp = () => {
         }));
 
         setEvents(prev => [...prev, ...formattedEvents]);
-        calendarRef.current.getApi().gotoDate(formattedEvents[0].start);
+        
+        // 跳转逻辑：优先跳到单次事件的时间，如果是循环事件则不跳转
+        if(formattedEvents[0].start) {
+          calendarRef.current.getApi().gotoDate(formattedEvents[0].start);
+        }
         setTaskName(''); 
         
       } else {
-        // ========== 【分支二：长期项目调度 (核心)】 ==========
-        if (!taskDDL || !estimatedHours) {
-          alert("长期任务需要明确的 DDL 和预估耗时！");
-          return; // 修复了原本的中文“回归;”
-        }
-
+        // ========== 【分支二：长期项目调度 (保持之前的逻辑，补充红线)】 ==========
+        if (!taskDDL || !estimatedHours) { alert("长期任务需要明确的 DDL 和预估耗时！"); return; }
         const searchStartDate = new Date(); 
-        const searchEndDate = new Date(taskDDL); 
-        searchEndDate.setHours(23, 59, 59);
+        const searchEndDate = new Date(taskDDL); searchEndDate.setHours(23, 59, 59);
 
+        // 这里的 findFreeSlots 已经帮你避开了已有日程
         const freeSlots = findFreeSlots(events, searchStartDate, searchEndDate, 1);
-        if (freeSlots.length === 0) {
-          alert("警告：在 DDL 之前已经没有大于 1 小时的连续空闲时间了！");
-          return;
-        }
+        if (freeSlots.length === 0) { alert("警告：在 DDL 之前已经没有空闲时间了！"); return; }
 
         const systemPrompt = `
-        你是一个严谨的日程统筹 AI。你需要将长期任务切分，并放入用户提供的【绝对空闲时间池】中。
+        你是一个严谨的日程统筹 AI。你需要将长期任务切分，并放入提供的【绝对空闲时间池】中。
         高压红线规则：
-        1. 你生成的子任务时间，必须 100% 包含在【空闲时间池】的 start 和 end 范围内。绝不允许超越边界，绝不允许占用未列出的时间段。
-        2. 每次子任务长度保持 1 到 2.5 小时。总耗时等于预估耗时。
-        3. 只返回一个合法的 JSON 数组，不要返回 markdown 标记，没有任何解释。
-        格式示例：
-        [
-          {"title": "信安赛报告 (1/4)", "start": "2026-04-29T09:00:00", "end": "2026-04-29T11:00:00"},
-          {"title": "信安赛报告 (2/4)", "start": "2026-04-29T14:00:00", "end": "2026-04-29T16:00:00"}
-        ]
+        1. 睡眠禁区：任何切分的子任务，绝不允许安排在 01:00 到 07:30 之间！
+        2. 你生成的子任务时间，必须 100% 包含在【空闲时间池】的 start 和 end 范围内。
+        3. 每次子任务长度保持 1 到 2.5 小时。总耗时等于预估耗时。
+        4. 只返回合法的 JSON 数组，不带任何 markdown。
         `;
 
         const userContext = `
-        任务名称：${taskName}
-        预估总耗时：${estimatedHours} 小时
-        最晚截止日期 (DDL)：${taskDDL}
-        可用的空闲时间池 (UTC时间)：
+        任务：${taskName}
+        预估耗时：${estimatedHours} 小时
+        可用的空闲时间池：
         ${JSON.stringify(freeSlots)}
-        请开始拆解并分配！返回纯 JSON 数组。
-        `;
-
-        console.log("正在请求大模型调度...");
+        请开始拆解并分配！纯JSON返回。`;
         
         const response = await fetch(API_URL, {
           method: "POST",
@@ -365,40 +366,22 @@ const handleWakeUp = () => {
         const data = await response.json();
         let aiResultStr = data.choices[0].message.content.trim();
         aiResultStr = aiResultStr.replace(/```json/g, '').replace(/```/g, '');
-        
-        console.log("模型原始返回:", aiResultStr);
         const parsedSubTasks = JSON.parse(aiResultStr);
 
-        // 【核心升级 4】将长期任务的根信息存入管理表
-        const parentTask = {
-          id: taskId,
-          name: taskName,
-          isLongTerm: true,
-          ddl: taskDDL,
-          estimatedHours: estimatedHours,
-          status: 'active'
-        };
+        const parentTask = { id: taskId, name: taskName, isLongTerm: true, ddl: taskDDL, estimatedHours: estimatedHours, status: 'active' };
         setTaskRegistry(prev => [...prev, parentTask]);
 
-        // 【核心升级 5】给所有切分出来的碎片打上统一的 groupId
         const formattedEvents = parsedSubTasks.map(e => ({
-          ...e,
-          groupId: taskId,
-          backgroundColor: '#f59e0b',
-          borderColor: '#d97706'
+          ...e, groupId: taskId, backgroundColor: '#f59e0b', borderColor: '#d97706'
         }));
 
         setEvents(prev => [...prev, ...formattedEvents]);
         calendarRef.current.getApi().gotoDate(formattedEvents[0].start);
-        
-        // 清空表单
-        setTaskName('');
-        setTaskDDL('');
-        setEstimatedHours('');
+        setTaskName(''); setTaskDDL(''); setEstimatedHours('');
       }
     } catch (error) {
       console.error("调度引擎发生错误:", error);
-      alert("AI 规划失败，请检查 F12 日志。可能是模型未按要求返回 JSON。");
+      alert("AI 规划失败。如果频繁报错，请检查它是不是又擅自加了 ```json 标记。");
     } finally {
       setIsThinking(false);
     }
@@ -606,8 +589,6 @@ return (
             right: isMobile ? 'timeGridDay,dayGridMonth' : 'dayGridMonth,timeGridWeek,timeGridDay'
           }}
           height={isMobile ? "60vh" : "70vh"}
-          slotMinTime="06:00:00"
-          slotMaxTime="24:00:00"
           locale="zh-cn"
           events={events}
           handleWindowResize={true}
@@ -658,7 +639,6 @@ return (
           </div>
         </div>
       )}
-      // 在任务管理 Modal 的标题栏附近
 <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '15px' }}>
   <h3 style={{ margin: 0 }}>⚙️ 任务管理</h3>
   <button 
