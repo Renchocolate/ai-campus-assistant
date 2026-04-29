@@ -282,6 +282,7 @@ const handleWakeUp = () => {
         2. 如果用户意图是“每天、每周、每个工作日”等循环任务，必须输出 FullCalendar 循环语法：
         [{"title": "名称", "daysOfWeek": [1,3,5], "startTime": "08:00:00", "endTime": "09:00:00"}] 
         (注：daysOfWeek数组中，0是周日，1是周一，依次类推到6是周六)
+        3. 动态习惯任务：如果用户输入“每天背单词”或“每周三次运动”，请使用单次任务的 JSON 数组格式，自动寻找未来 7 天内每天/每周的空闲缝隙填入，持续时间默认为 30-60 分钟。
         
         仅返回合法的 JSON 数组，不要带任何 markdown (比如 \`\`\`json) 或多余解释！`;
         
@@ -386,6 +387,97 @@ const handleWakeUp = () => {
       setIsThinking(false);
     }
   };
+  // 🚀 终极杀器：全量动态重排引擎
+  const handleRebalanceAll = async () => {
+    setIsThinking(true);
+    
+    // 1. 提取“不可动”的护城河任务（课表、单次固定任务）
+    const fixedEvents = events.filter(e => !e.groupId || !taskRegistry.find(t => t.id === e.groupId && t.isLongTerm));
+    
+    // 2. 提取需要重新洗牌的“弹性任务池”
+    const flexibleTasks = taskRegistry.filter(t => t.isLongTerm && t.status === 'active');
+    
+    if (flexibleTasks.length === 0) {
+      alert("当前没有活跃的长期任务需要重排。");
+      setIsThinking(false);
+      return;
+    }
+
+    // 3. 计算最远 DDL，划定重排的时间边界
+    const maxDDL = new Date(Math.max(...flexibleTasks.map(t => new Date(t.ddl))));
+    maxDDL.setHours(23, 59, 59);
+    const searchStartDate = new Date();
+    
+    // 提取未来所有的空闲碎片
+    const freeSlots = findFreeSlots(fixedEvents, searchStartDate, maxDDL, 0.5);
+
+    // 4. 召唤大模型进行“高维统筹”
+    const API_KEY = import.meta.env.VITE_DEEPSEEK_API_KEY;
+    const API_URL = "https://api.deepseek.com/chat/completions"; 
+
+    const systemPrompt = `
+    你是一个顶尖的学术时间管理大师。你的任务是将用户提供的【多个长期项目】重新分配到【空闲时间池】中。
+    
+    【核心法则】
+    1. 优先级：DDL 越近的任务优先级越高，优先安排。
+    2. 睡眠禁区：01:00 到 07:30 绝对禁止安排任何任务。
+    3. 任务隔离：同一时间只能安排一个任务，绝不能重叠。
+    4. 标签规范：生成的 title 必须包含原任务名和进度（如 "SCAS实验 (1/5)"）。
+    5. 时间块：每个子任务长度保持 1 到 2.5 小时。
+    
+    只返回合法的 JSON 数组，包含所有重排后的子任务。绝不返回 markdown 标记。
+    格式示例: [{"title": "任务A (1/3)", "start": "2026-04-29T09:00:00", "end": "2026-04-29T11:00:00", "groupId": "对应的原任务ID"}]
+    `;
+
+    const userContext = `
+    【不可动的固定日程】(请绝对避开它们)：
+    ${fixedEvents.map(e => `${e.title}: ${e.start || e.startTime}`).join('\n')}
+    
+    【需要你重新安排的长期任务】：
+    ${JSON.stringify(flexibleTasks)}
+    
+    【可用的空闲时间池】：
+    ${JSON.stringify(freeSlots)}
+    `;
+
+    try {
+      showToast("开始重排", "AI 正在重新计算所有长期任务的最优路径...");
+      const response = await fetch(API_URL, {
+        method: "POST",
+        headers: { "Content-Type": "application/json", "Authorization": `Bearer ${API_KEY}` },
+        body: JSON.stringify({
+          model: "deepseek-chat",
+          messages: [
+            { role: "system", content: systemPrompt },
+            { role: "user", content: userContext }
+          ],
+          temperature: 0.1
+        })
+      });
+
+      const data = await response.json();
+      let aiResultStr = data.choices[0].message.content.trim();
+      aiResultStr = aiResultStr.replace(/```json/g, '').replace(/```/g, '');
+      const parsedSubTasks = JSON.parse(aiResultStr);
+
+      // 5. 格式化并覆盖原有日历
+      const formattedNewSubTasks = parsedSubTasks.map(e => ({
+        ...e,
+        backgroundColor: '#f59e0b', // 橙色代表长期任务
+        borderColor: '#d97706'
+      }));
+
+      // 合并：固定任务 + 重新规划的长期任务
+      setEvents([...fixedEvents, ...formattedNewSubTasks]);
+      showToast("重排完成", "已根据优先级避开冲突并更新所有长期任务！");
+      
+    } catch (error) {
+      console.error("重排引擎崩溃:", error);
+      alert("重排失败，请检查控制台日志。");
+    } finally {
+      setIsThinking(false);
+    }
+  };
 return (
     <div style={{ 
       padding: isMobile ? '10px' : '20px', 
@@ -422,6 +514,23 @@ return (
               </button>
             )}
           </div>
+          {/* 在顶部控制台，紧挨着“开启通知”按钮的后面添加： */}
+        <button 
+          onClick={handleRebalanceAll} 
+          disabled={isThinking}
+          style={{ 
+            padding: '4px 12px', 
+            backgroundColor: isThinking ? '#9ca3af' : '#8b5cf6', 
+            color: 'white', 
+            border: 'none', 
+            borderRadius: '4px', 
+            cursor: isThinking ? 'not-allowed' : 'pointer',
+            fontSize: '12px',
+            marginLeft: '10px'
+          }}
+        >
+          {isThinking ? '🔄 算力满载中...' : '🌟 AI 全局防冲突重排'}
+        </button>
         </div>
         <button 
           onClick={() => setIsTaskManagerOpen(true)}
